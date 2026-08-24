@@ -22,8 +22,8 @@ MQTT_CLIENT_ID="r6220-travelmate"
 # MQTT_PASS="your_password"   # Uncomment if broker requires auth
 
 AP_SSID="CONROY31FK"
-AP_IFACE="phy1-ap0"        # 2.4GHz interface (verify with: iw dev)
-UPLINK_IFACE="phy1-sta0"    # 5GHz uplink interface (verify with: iw dev)
+AP_IFACE="phy1-ap0"      # 2.4GHz virtual AP interface
+UPLINK_IFACE="phy1-sta0" # 5GHz uplink station interface
 
 TRMD_STATUS_FILE="/var/run/travelmate/travelmate.json"
 # ──────────────────────────────────────────────────────────────────────────────
@@ -96,63 +96,72 @@ UPLINK_BSSID=$(iwinfo "$UPLINK_IFACE" info 2>/dev/null | awk '/Access Point/{pri
 [ -z "$UPLINK_BSSID" ] && UPLINK_BSSID="none"
 
 # ─── 2.4GHz AP: Connected Clients ─────────────────────────────────────────────
-# iw dev wlan0 station dump gives us MAC + signal for associated stations
-# Cross-reference /tmp/dhcp.leases for IP and hostname
+# iw dev phy1-ap0 station dump returns nothing — the R6220 driver does not
+# report AP-side associations via nl80211 on this interface.
+# Instead: use the DHCP lease file as the authoritative client list, then
+# cross-reference the kernel ARP table to confirm reachability and get
+# the current IP→MAC binding. Only include clients whose ARP entry is
+# in a reachable/stale state (i.e. they have communicated recently).
 
-CLIENT_JSON=""
-CLIENT_COUNT=0
+CLIENTS_TMPFILE="/tmp/trmd_clients_$$.json"
+: > "$CLIENTS_TMPFILE"
 
-iw dev "$AP_IFACE" station dump 2>/dev/null | grep "^Station" | awk '{print $2}' | while read -r MAC; do
+# ARP table format (/proc/net/arp):
+# IP address       HW type  Flags  HW address          Mask  Device
+# 192.168.8.189    0x1      0x2    64:5a:04:c8:ce:6b   *     br-lan
+# Flags: 0x2 = reachable/stale, 0x0 = incomplete — skip 0x0
+
+# DHCP leases format:
+# <expiry> <mac> <ip> <hostname> <clientid>
+
+# Read leases into the loop; for each lease check ARP confirms it's active
+while read -r EXPIRY MAC CLIENT_IP CLIENT_NAME CLIENTID; do
+    # Skip blank lines
+    [ -z "$MAC" ] && continue
+
     MAC_UPPER=$(echo "$MAC" | tr 'a-z' 'A-Z')
-
-    # Look up in DHCP leases: format is "expiry mac ip hostname ..."
-    LEASE_LINE=$(grep -i "$MAC" /tmp/dhcp.leases 2>/dev/null | head -1)
-    CLIENT_IP=$(echo "$LEASE_LINE" | awk '{print $3}')
-    CLIENT_NAME=$(echo "$LEASE_LINE" | awk '{print $4}')
-    [ -z "$CLIENT_IP" ]   && CLIENT_IP="unknown"
-    [ -z "$CLIENT_NAME" ] && CLIENT_NAME="unknown"
+    [ -z "$CLIENT_NAME" ]    && CLIENT_NAME="unknown"
     [ "$CLIENT_NAME" = "*" ] && CLIENT_NAME="unknown"
 
-    # Per-client signal
-    CLIENT_SIGNAL=$(iw dev "$AP_IFACE" station get "$MAC" 2>/dev/null \
-        | awk '/signal:/{print $2}' | head -1)
-    [ -z "$CLIENT_SIGNAL" ] && CLIENT_SIGNAL="null"
+    # Check ARP table — match on IP AND MAC, restrict to br-lan
+    # This prevents the uplink gateway (on phy1-sta0) from leaking into client list
+    ARP_FLAGS=$(awk -v ip="$CLIENT_IP" -v mac="$MAC" \
+        'tolower($1)==tolower(ip) && tolower($4)==tolower(mac) && $6=="br-lan" {print $3}' \
+        /proc/net/arp 2>/dev/null | head -1)
 
-    # TX/RX bytes
-    TX_BYTES=$(iw dev "$AP_IFACE" station get "$MAC" 2>/dev/null \
-        | awk '/tx bytes:/{print $3}')
-    RX_BYTES=$(iw dev "$AP_IFACE" station get "$MAC" 2>/dev/null \
-        | awk '/rx bytes:/{print $3}')
-    [ -z "$TX_BYTES" ] && TX_BYTES="0"
-    [ -z "$RX_BYTES" ] && RX_BYTES="0"
-
-    ESC_NAME=$(json_escape "$CLIENT_NAME")
-    ESC_IP=$(json_escape "$CLIENT_IP")
-
-    ENTRY="{\"mac\":\"$MAC_UPPER\",\"ip\":\"$ESC_IP\",\"hostname\":\"$ESC_NAME\",\"signal_dbm\":$CLIENT_SIGNAL,\"tx_bytes\":$TX_BYTES,\"rx_bytes\":$RX_BYTES}"
-
-    if [ -z "$CLIENT_JSON" ]; then
-        CLIENT_JSON="$ENTRY"
-    else
-        CLIENT_JSON="$CLIENT_JSON,$ENTRY"
+    # No matching ARP entry, or entry is 0x0 (incomplete) — skip
+    if [ -z "$ARP_FLAGS" ] || [ "$ARP_FLAGS" = "0x0" ]; then
+        continue
     fi
 
-    CLIENT_COUNT=$((CLIENT_COUNT + 1))
+    # Signal: not available via this method — use null
+    CLIENT_SIGNAL="null"
+    TX_BYTES="0"
+    RX_BYTES="0"
 
-    # Write count and array to temp files so the subshell values survive
-    echo "$CLIENT_COUNT" > /tmp/trmd_client_count
-    echo "$CLIENT_JSON"  > /tmp/trmd_client_json
-done
+    ESC_NAME=$(printf '%s' "$CLIENT_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    ESC_IP=$(printf '%s'   "$CLIENT_IP"   | sed 's/\\/\\\\/g; s/"/\\"/g')
 
-# Read back from temp files (subshell limitation workaround)
-if [ -f /tmp/trmd_client_count ]; then
-    CLIENT_COUNT=$(cat /tmp/trmd_client_count)
-    CLIENT_JSON=$(cat /tmp/trmd_client_json)
-    rm -f /tmp/trmd_client_count /tmp/trmd_client_json
-else
-    CLIENT_COUNT=0
-    CLIENT_JSON=""
+    printf '{"mac":"%s","ip":"%s","hostname":"%s","signal_dbm":%s,"tx_bytes":%s,"rx_bytes":%s}\n' \
+        "$MAC_UPPER" "$ESC_IP" "$ESC_NAME" "$CLIENT_SIGNAL" "$TX_BYTES" "$RX_BYTES" \
+        >> "$CLIENTS_TMPFILE"
+
+done < /tmp/dhcp.leases
+
+# Reassemble in main shell — no subshell, CLIENT_COUNT/CLIENT_JSON persist
+CLIENT_COUNT=0
+CLIENT_JSON=""
+if [ -s "$CLIENTS_TMPFILE" ]; then
+    while IFS= read -r LINE; do
+        CLIENT_COUNT=$((CLIENT_COUNT + 1))
+        if [ -z "$CLIENT_JSON" ]; then
+            CLIENT_JSON="$LINE"
+        else
+            CLIENT_JSON="$CLIENT_JSON,$LINE"
+        fi
+    done < "$CLIENTS_TMPFILE"
 fi
+rm -f "$CLIENTS_TMPFILE"
 
 # ─── Assemble JSON Payload ─────────────────────────────────────────────────────
 PAYLOAD=$(cat <<EOF
@@ -214,4 +223,3 @@ else
 fi
 
 exit $EXIT_CODE
-

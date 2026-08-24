@@ -1,0 +1,35 @@
+ {
+  "timestamp": "2026-08-24T18:11:08Z",
+  "router": {
+    "hostname": "OpenWrt",
+    "model": "Netgear R6220",
+    "firmware": "DISTRIB_RELEASE='25.12.2'",
+    "uptime_seconds": 249402,
+    "uptime_human": "2d 21h 16m",
+    "load": { "1m": 0.11, "5m": 0.17, "15m": 0.16 },
+    "memory": {
+      "total_kb": 118888,
+      "used_kb": 64104,
+      "free_kb": 54784,
+      "used_pct": 53.9
+    },
+    "cpu_temp_c": null
+  },
+  "travelmate": {
+    "version": "unknown",
+    "status": "unknown",
+    "uplink_ssid": "Samsung Galaxy_4437",
+    "uplink_bssid": "be:a5:11:fb:50:fc",
+    "uplink_signal_dbm": -54,
+    "uplink_interface": "phy1-sta0"
+  },
+  "ap": {
+    "ssid": "CONROY31FK",
+    "interface": "phy1-ap0",
+    "client_count": 4,
+    "clients": [{"mac":"64:5A:04:C8:CE:6B","ip":"192.168.8.189","hostname":"momtoshiba","signal_dbm":null,"tx_bytes":0,"rx_bytes":0},{"mac":"2C:CF:67:23:55:D9","ip":"192.168.8.238","hostname":"obd2rv","signal_dbm":null,"tx_bytes":0,"rx_bytes":0},{"mac":"D8:3A:DD:D4:D4:D0","ip":"192.168.8.239","hostname":"mqttrv","signal_dbm":null,"tx_bytes":0,"rx_bytes":0},{"mac":"0C:8B:95:AA:B8:F0","ip":"192.168.8.210","hostname":"lilygo","signal_dbm":null,"tx_bytes":0,"rx_bytes":0}]
+  }
+}
+
+
+
