@@ -16,7 +16,7 @@
 # ─── Configuration ────────────────────────────────────────────────────────────
 MQTT_BROKER="192.168.8.239"
 MQTT_PORT="1883"
-MQTT_TOPIC="router/conroy31fk/status"
+MQTT_TOPIC="R6220/STATS"
 MQTT_CLIENT_ID="r6220-travelmate"
 # MQTT_USER="your_user"       # Uncomment if broker requires auth
 # MQTT_PASS="your_password"   # Uncomment if broker requires auth
